@@ -28,9 +28,16 @@ def init_db():
             content TEXT,
             tokens INTEGER,
             timestamp REAL,
+            model TEXT DEFAULT 'rlm',
             FOREIGN KEY(conversation_id) REFERENCES conversations(id)
         )
     ''')
+
+    # Migrate existing DBs that lack the model column
+    try:
+        c.execute("ALTER TABLE messages ADD COLUMN model TEXT DEFAULT 'rlm'")
+    except Exception:
+        pass  # Column already exists
     
     conn.commit()
     conn.close()
@@ -55,14 +62,14 @@ def get_all_conversations() -> List[Dict]:
     conn.close()
     return [dict(row) for row in rows]
 
-def save_message(conversation_id: int, role: str, content: str, tokens: int = 0):
+def save_message(conversation_id: int, role: str, content: str, tokens: int = 0, model: str = 'rlm'):
     """Saves a single message to the database."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute('''
-        INSERT INTO messages (conversation_id, role, content, tokens, timestamp)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (conversation_id, role, content, tokens, time.time()))
+        INSERT INTO messages (conversation_id, role, content, tokens, timestamp, model)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (conversation_id, role, content, tokens, time.time(), model))
     
     # Auto-update title if it's the first user message
     if role == "user":
@@ -77,12 +84,24 @@ def save_message(conversation_id: int, role: str, content: str, tokens: int = 0)
     conn.commit()
     conn.close()
 
-def load_messages(conversation_id: int) -> List[Dict[str, Any]]:
-    """Loads full context for a specific conversation."""
+def load_messages(conversation_id: int, models: list = None) -> List[Dict[str, Any]]:
+    """Loads messages for a conversation, optionally filtered by model list."""
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT role, content, tokens, timestamp FROM messages WHERE conversation_id = ? ORDER BY id ASC", (conversation_id,))
+    if models:
+        placeholders = ",".join("?" * len(models))
+        c.execute(
+            f"SELECT role, content, tokens, timestamp, model FROM messages "
+            f"WHERE conversation_id = ? AND model IN ({placeholders}) ORDER BY id ASC",
+            [conversation_id] + models,
+        )
+    else:
+        c.execute(
+            "SELECT role, content, tokens, timestamp, model FROM messages "
+            "WHERE conversation_id = ? ORDER BY id ASC",
+            (conversation_id,),
+        )
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
